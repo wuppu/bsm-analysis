@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BSM Packet Analysis Dashboard</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+
+    <style>
+        :root {
+            /* Original index.html Color Scheme */
+            --primary-color: #2563eb90;
+            --primary-hover: #1d4ed8ab;
+            --danger-color: #ef444490;
+            --danger-solid: #ef4444;
+            --text-main: #1f2937;
+            --text-sub: #6b7280;
+            --bg-panel: rgba(255, 255, 255, 0.75);
+            --bg-solid: #ffffff;
+            --bg-body: #f3f4f6;
+            --border-color: #e5e7eb;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        body {
+            margin: 0; padding: 0; font-family: 'Inter', sans-serif;
+            color: var(--text-main); height: 100vh; overflow: hidden;
+            display: flex; background-color: var(--bg-body);
+        }
+
+        /* --- Layout & Resizer --- */
+        #left-panel {
+            width: 50%; /* Default 50% */
+            min-width: 30%;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #resizer {
+            width: 8px;
+            background-color: var(--border-color);
+            cursor: col-resize;
+            z-index: 100;
+            transition: background-color 0.2s ease;
+        }
+
+        #resizer:hover, #resizer.resizing {
+            background-color: #2563eb; /* Highlight on hover/drag */
+        }
+
+        #right-panel {
+            flex: 1;
+            min-width: 30%;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-solid);
+            overflow-y: auto;
+        }
+
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; }
+
+        /* --- Panel Style (Matched to Original) --- */
+        .panel {
+            position: absolute; top: 24px; left: 24px; width: 340px;
+            background-color: var(--bg-panel); backdrop-filter: blur(8px);
+            padding: 24px; border-radius: 16px; box-shadow: var(--shadow);
+            box-sizing: border-box; z-index: 10;
+        }
+
+        .panel-title { margin: 0 0 8px 0; font-size: 18px; font-weight: 700; color: #111827; }
+        .panel-subtitle { margin: 0 0 20px 0; font-size: 13px; color: var(--text-sub); }
+
+        .btn-upload {
+            display: block; width: 100%; text-align: center; box-sizing: border-box;
+            background-color: var(--primary-color); color: white; border: none; padding: 12px 16px;
+            border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px;
+            transition: background 0.2s; position: relative; overflow: hidden;
+            backdrop-filter: blur(4px);
+        }
+        .btn-upload:hover { background-color: var(--primary-hover); }
+        .btn-upload input[type="file"] {
+            position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+        }
+
+        #statusMsg { margin-top: 16px; font-size: 13px; font-weight: 500; color: var(--text-sub); }
+
+        /* 범례 폰트 색상 및 크기 매칭 */
+        .legend { margin-top: 24px; font-size: 13px; color: var(--text-sub); padding-top: 16px; border-top: 1px solid var(--border-color); }
+        .legend-item { display: flex; align-items: center; margin-bottom: 8px; }
+        .legend-line { width: 24px; height: 4px; border-radius: 2px; margin-right: 12px; }
+
+        /* --- Right Panel (Charts) --- */
+        .chart-header {
+            padding: 24px 32px 16px; background: var(--bg-solid);
+            position: sticky; top: 0; z-index: 5; border-bottom: 1px solid var(--border-color);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .chart-header h2 { margin: 0; font-size: 18px; font-weight: 700; }
+        .chart-controls { font-size: 13px; color: var(--text-sub); display: flex; align-items: center; gap: 8px; }
+        select {
+            padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border-color);
+            font-family: inherit; font-size: 13px; outline: none; background: #fff;
+        }
+
+        .chart-list { padding: 24px 32px; display: flex; flex-direction: column; gap: 24px; }
+        .chart-card {
+            border: 1px solid var(--border-color); border-radius: 16px; padding: 20px;
+            height: 280px; position: relative; box-shadow: var(--shadow); background: #fff;
+        }
+        .chart-title { position: absolute; top: 20px; left: 24px; font-weight: 600; font-size: 14px; color: var(--text-main); z-index: 1; }
+        .canvas-container { width: 100%; height: 100%; padding-top: 24px; box-sizing: border-box; }
+
+    </style>
+</head>
+<body>
+<div id="left-panel">
+    <div id="map"></div>
+    <div class="panel">
+        <h1 class="panel-title">BSM Packet Analysis</h1>
+        <p class="panel-subtitle">위치 궤적 및 차량 동역학 데이터 매칭</p>
+
+        <div class="btn-upload">
+            <span id="uploadBtnText">CSV 데이터 파일 업로드</span>
+            <input type="file" id="csvFileInput" accept=".csv" />
+        </div>
+        <div id="statusMsg">파일을 업로드하여 분석을 시작하세요.</div>
+
+        <div class="legend">
+            <div class="legend-item"><div class="legend-line" style="background: #2563eb;"></div> 정상 주행 궤적</div>
+            <div class="legend-item"><div class="legend-line" style="background: var(--danger-solid);"></div> Unknown 데이터 구간</div>
+        </div>
+    </div>
+</div>
+
+<div id="resizer"></div>
+
+<div id="right-panel">
+    <div class="chart-header">
+        <h2>차량 주행 데이터 추이</h2>
+        <div class="chart-controls">
+            <label for="downsampleSelect">데이터 표시 밀도:</label>
+            <select id="downsampleSelect">
+                <option value="1" selected>전체 표시</option>
+                <option value="5">1/5 표시</option>
+                <option value="10">1/10 표시</option>
+            </select>
+        </div>
+    </div>
+    <div class="chart-list">
+        <div class="chart-card">
+            <div class="chart-title">Speed (km/h) - GPS & Accel Fusion</div>
+            <div class="canvas-container"><canvas id="chartSpeed"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Longitudinal Acceleration (m/s²)</div>
+            <div class="canvas-container"><canvas id="chartAccLon"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Lateral Acceleration (m/s²)</div>
+            <div class="canvas-container"><canvas id="chartAccLat"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Yaw Rate (deg/s)</div>
+            <div class="canvas-container"><canvas id="chartYaw"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Heading (deg)</div>
+            <div class="canvas-container"><canvas id="chartHeading"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+    // --- 1. 차트 수직선(Crosshair) 커스텀 플러그인 생성 ---
+    const crosshairPlugin = {
+        id: 'crosshair',
+        afterDraw: chart => {
+            if (chart.tooltip && chart.tooltip._active && chart.tooltip._active.length) {
+                const activePoint = chart.tooltip._active[0];
+                const ctx = chart.ctx;
+                const x = activePoint.element.x;
+                const topY = chart.scales.y.top;
+                const bottomY = chart.scales.y.bottom;
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(x, topY);
+                ctx.lineTo(x, bottomY);
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = 'rgba(239, 68, 68, 0.7)'; // 반투명 붉은 점선
+                ctx.setLineDash([4, 4]);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+    };
+
+    // --- Split View Resizer Logic ---
+    const resizer = document.getElementById('resizer');
+    const leftPanel = document.getElementById('left-panel');
+    const rightPanel = document.getElementById('right-panel');
+    let isResizing = false;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        resizer.classList.add('resizing');
+        document.body.style.cursor = 'col-resize';
+        leftPanel.style.pointerEvents = 'none';
+        rightPanel.style.pointerEvents = 'none';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        let newWidth = (e.clientX / window.innerWidth) * 100;
+        if (newWidth < 20) newWidth = 20;
+        if (newWidth > 80) newWidth = 80;
+        leftPanel.style.width = `${newWidth}%`;
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            resizer.classList.remove('resizing');
+            document.body.style.cursor = '';
+            leftPanel.style.pointerEvents = '';
+            rightPanel.style.pointerEvents = '';
+            setTimeout(() => {
+                map.resize();
+                chartInstances.forEach(c => c.resize());
+            }, 50);
+        }
+    });
+
+    // --- Map Initialization ---
+    const map = new maplibregl.Map({
+        container: 'map',
+        style: {
+            "version": 8,
+            "sources": { "osm": { "type": "raster", "tiles": ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"], "tileSize": 256 } },
+            "layers": [{ "id": "osm", "type": "raster", "source": "osm" }]
+        },
+        center: [127.109, 37.404], zoom: 14
+    });
+    map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+
+    let globalData = [];
+    let chartInstances = [];
+    let hoverMarker = null;
+
+    map.on('load', () => {
+        map.addSource('route-normal', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addSource('route-unknown', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+        map.addLayer({
+            id: 'layer-normal', type: 'line', source: 'route-normal',
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': '#2563eb', 'line-width': 5, 'line-opacity': 0.8 }
+        });
+
+        map.addLayer({
+            id: 'layer-unknown', type: 'line', source: 'route-unknown',
+            layout: { 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': '#ef4444', 'line-width': 6, 'line-opacity': 1.0 }
+        });
+    });
+
+    function updateStatus(msg, isError = false) {
+        const el = document.getElementById('statusMsg');
+        el.innerText = msg;
+        el.style.color = isError ? 'var(--danger-solid)' : 'var(--text-sub)';
+    }
+
+    document.getElementById('csvFileInput').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        document.getElementById('uploadBtnText').innerText = file.name;
+        updateStatus("데이터 분석 중...");
+
+        Papa.parse(file, {
+            header: true, dynamicTyping: true, skipEmptyLines: true,
+            complete: (results) => processData(results.data),
+            error: (err) => updateStatus("오류: " + err.message, true)
+        });
+    });
+
+    document.getElementById('downsampleSelect').addEventListener('change', () => {
+        if (globalData.length > 0) updateCharts();
+    });
+
+    function getDistanceMeters(lat1, lon1, lat2, lon2) {
+        const R = 6371e3;
+        const p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+        const dp = (lat2 - lat1) * Math.PI / 180;
+        const dl = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dp/2) * Math.sin(dp/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) * Math.sin(dl/2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function processData(data) {
+        globalData = [];
+        const normalCoords = [];
+        const unknownLines = [];
+        let currentUnknownSegment = [];
+        const bounds = new maplibregl.LngLatBounds();
+
+        let prevLat = null, prevLng = null;
+        let currentSpeedMs = 0;
+        const dt = 0.1;
+        const alpha = 0.9;
+
+        data.forEach((row, i) => {
+            if (!row.lat || !row.long) return;
+
+            const lat = Number(row.lat) / 1e7;
+            const lng = Number(row.long) / 1e7;
+
+            const acc_lat_ms2 = row.acc_lat / 100;
+            const acc_lon_ms2 = row.acc_lon / 100;
+            const acc_yaw_degs = row.acc_yaw / 100;
+
+            // Heading 값 파싱 (단위: 0.0125도). 28800은 알 수 없는 값(Unavailable)입니다.
+            let heading_degs = null;
+            if (row.heading !== undefined && row.heading !== 28800) {
+                heading_degs = row.heading * 0.0125;
+            }
+
+            const isUnknown = (row.acc_lat === 2001 && row.acc_lon === 0 && row.acc_vert === -127 && row.acc_yaw === 0);
+
+            let gpsSpeedMs = 0;
+            if (prevLat !== null && prevLng !== null) {
+                const distMeters = getDistanceMeters(prevLat, prevLng, lat, lng);
+                gpsSpeedMs = distMeters / dt;
+            }
+
+            if (isUnknown || prevLat === null) {
+                currentSpeedMs = gpsSpeedMs;
+            } else {
+                const predictedSpeedMs = currentSpeedMs + (acc_lon_ms2 * dt);
+                currentSpeedMs = (alpha * predictedSpeedMs) + ((1 - alpha) * gpsSpeedMs);
+                if (currentSpeedMs < 0) currentSpeedMs = 0;
+            }
+
+            const speedKmh = currentSpeedMs * 3.6;
+
+            globalData.push({
+                lat, lng, isUnknown,
+                acc_lat_val: acc_lat_ms2,
+                acc_lon_val: acc_lon_ms2,
+                acc_yaw_val: acc_yaw_degs,
+                heading_val: heading_degs,  // 헤딩 값 추가
+                speed: speedKmh,
+                timeLabel: row.Date || i,
+                originalIndex: i
+            });
+
+            bounds.extend([lng, lat]);
+            normalCoords.push([lng, lat]);
+
+            if (isUnknown) {
+                if (currentUnknownSegment.length === 0 && i > 0) {
+                    currentUnknownSegment.push([prevLng, prevLat]);
+                }
+                currentUnknownSegment.push([lng, lat]);
+            } else {
+                if (currentUnknownSegment.length > 0) {
+                    currentUnknownSegment.push([lng, lat]);
+                    unknownLines.push(currentUnknownSegment);
+                    currentUnknownSegment = [];
+                }
+            }
+
+            prevLat = lat; prevLng = lng;
+        });
+
+        if (currentUnknownSegment.length > 0) unknownLines.push(currentUnknownSegment);
+
+        map.getSource('route-normal').setData({
+            type: 'FeatureCollection',
+            features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: normalCoords } }]
+        });
+
+        const multiUnknownFeatures = unknownLines.map(line => ({
+            type: 'Feature', geometry: { type: 'LineString', coordinates: line }
+        }));
+        map.getSource('route-unknown').setData({ type: 'FeatureCollection', features: multiUnknownFeatures });
+
+        if (normalCoords.length > 0) {
+            map.fitBounds(bounds, { padding: 50 });
+            updateStatus(`성공적으로 렌더링 완료 (${globalData.length.toLocaleString()}개 패킷)`);
+            updateCharts();
+        } else {
+            updateStatus("표시할 위치 데이터가 없습니다.", true);
+        }
+    }
+
+    function updateCharts() {
+        const step = parseInt(document.getElementById('downsampleSelect').value) || 1;
+        const labels = [], dataSpeed = [], dataLon = [], dataLat = [], dataYaw = [], dataHeading = [], isUnknownArr = [];
+
+        globalData.forEach((row, i) => {
+            if (i % step === 0 || row.isUnknown) {
+                labels.push(row.timeLabel);
+                isUnknownArr.push(row.isUnknown);
+
+                if (row.isUnknown) {
+                    dataSpeed.push(0); dataLon.push(0); dataLat.push(0); dataYaw.push(0); dataHeading.push(0);
+                } else {
+                    dataSpeed.push(row.speed.toFixed(1));
+                    dataLon.push(row.acc_lon_val);
+                    dataLat.push(row.acc_lat_val);
+                    dataYaw.push(row.acc_yaw_val);
+                    dataHeading.push(row.heading_val);
+                }
+            }
+        });
+
+        chartInstances.forEach(chart => chart.destroy());
+        chartInstances = [];
+
+        createChart('chartSpeed', 'Speed (km/h)', labels, dataSpeed, '#8b5cf6', step, isUnknownArr);
+        createChart('chartAccLon', 'Longitudinal Accel (m/s²)', labels, dataLon, '#10b981', step, isUnknownArr);
+        createChart('chartAccLat', 'Lateral Accel (m/s²)', labels, dataLat, '#3b82f6', step, isUnknownArr);
+        createChart('chartYaw', 'Yaw Rate (deg/s)', labels, dataYaw, '#f59e0b', step, isUnknownArr);
+        createChart('chartHeading', 'Heading (deg)', labels, dataHeading, '#ec4899', step, isUnknownArr); // 방위각 차트
+    }
+
+    function createChart(canvasId, titleText, labels, dataArr, color, step, isUnknownArr) {
+        const ctx = document.getElementById(canvasId).getContext('2d');
+
+        const unknownBorderColor = 'rgba(156, 163, 175, 0.2)';
+        const unknownBgColor = 'rgba(156, 163, 175, 0.05)';
+
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: titleText, data: dataArr,
+                    borderColor: color, backgroundColor: color + '20',
+                    borderWidth: 2, pointRadius: 0, tension: 0.1, fill: true,
+                    segment: {
+                        borderColor: ctx => isUnknownArr[ctx.p1DataIndex] ? unknownBorderColor : color,
+                        backgroundColor: ctx => isUnknownArr[ctx.p1DataIndex] ? unknownBgColor : color + '20'
+                    },
+                    spanGaps: false
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const idx = context.dataIndex;
+                                if (isUnknownArr[idx]) {
+                                    return '⚠️ UNKNOWN (0 표시)';
+                                }
+                                return context.dataset.label + ': ' + context.parsed.y;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { display: false },
+                    y: { display: true, grid: { color: '#f3f4f6' } }
+                },
+                onHover: function(e, activeElements, currentChart) {
+                    if (activeElements.length > 0) {
+                        const dataIndex = activeElements[0].index;
+                        const globalIdx = dataIndex * step;
+                        if(globalData[globalIdx]) highlightMapPosition(globalIdx);
+
+                        // 다른 차트에도 툴팁과 Crosshair 활성화
+                        chartInstances.forEach(c => {
+                            if (c.canvas.id !== currentChart.canvas.id) {
+                                c.setActiveElements([{ datasetIndex: 0, index: dataIndex }]);
+                                c.tooltip.setActiveElements([{ datasetIndex: 0, index: dataIndex }], e);
+                                c.update();
+                            }
+                        });
+                    } else {
+                        // 마우스가 차트 밖으로 나갔을 때
+                        chartInstances.forEach(c => {
+                            if (c.canvas.id !== currentChart.canvas.id) {
+                                c.setActiveElements([]);
+                                c.tooltip.setActiveElements([]);
+                                c.update();
+                            }
+                        });
+                    }
+                }
+            },
+            plugins: [crosshairPlugin] // 커스텀 수직선 플러그인
+        });
+
+        document.getElementById(canvasId).addEventListener('mouseout', () => {
+            chartInstances.forEach(c => {
+                c.setActiveElements([]);
+                c.tooltip.setActiveElements([]);
+                c.update();
+            });
+        });
+
+        chartInstances.push(chart);
+    }
+
+    function highlightMapPosition(index) {
+        const point = globalData[index];
+        if (!point) return;
+
+        if (hoverMarker) hoverMarker.remove();
+
+        const el = document.createElement('div');
+        el.style.width = '20px'; el.style.height = '20px';
+        el.style.backgroundColor = point.isUnknown ? '#ef4444' : '#111827';
+        el.style.border = '4px solid white';
+        el.style.borderRadius = '50%';
+        el.style.boxShadow = '0 0 8px rgba(0,0,0,0.3)';
+        el.style.transform = 'translate(-50%, -50%)';
+        el.style.pointerEvents = 'none';
+
+        hoverMarker = new maplibregl.Marker({ element: el })
+            .setLngLat([point.lng, point.lat])
+            .addTo(map);
+    }
+</script>
+</body>
+</html>
